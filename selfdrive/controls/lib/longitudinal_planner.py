@@ -64,6 +64,7 @@ class LongitudinalPlanner:
 
     self.a_desired = init_a
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
+    self.v_cruise_coast = init_v  # coast-down smoothing of a lowered set speed
     self.v_model_error = 0.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
@@ -124,6 +125,17 @@ class LongitudinalPlanner:
 
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
+
+    # COAST to a lowered set speed (engine-braking feel) instead of braking hard.
+    # Rate-limits only the cruise-target DECREASE. Lead/emergency braking (MPC via
+    # radarState), forceDecel, and turn/speed-limit slowing are applied later and
+    # remain instant. Speed increases are instant too.
+    COAST_SETSPEED_DECEL = 0.5  # m/s^2 (gentle, ~engine-braking)
+    if reset_state or v_cruise > self.v_cruise_coast:
+      self.v_cruise_coast = v_cruise
+    else:
+      self.v_cruise_coast = max(v_cruise, self.v_cruise_coast - COAST_SETSPEED_DECEL * self.dt)
+    v_cruise = self.v_cruise_coast
 
     if self.mpc.mode == 'acc':
       accel_limits = [A_CRUISE_MIN, get_max_accel(v_ego)]
