@@ -102,7 +102,7 @@ class LatControlTorque(LatControl):
       # Scaling the lateral acceleration "friction response" could be helpful for some.
       # Increase for a stronger response, decrease for a weaker response.
       self.lat_jerk_friction_factor = 0.4
-      self.lat_accel_friction_factor = 1.5 # TUNED 1.5 (was 0.7): punch through Civic rack stiction. in [0,3].
+      self.lat_accel_friction_factor = 0.7 # in [0, 3], in 0.05 increments. 3 is arbitrary safety limit
 
       # precompute time differences between ModelConstants.T_IDXS
       self.t_diffs = np.diff(ModelConstants.T_IDXS)
@@ -200,7 +200,7 @@ class LatControlTorque(LatControl):
         if self.use_steering_angle or lookahead_lateral_jerk == 0.0:
           lookahead_lateral_jerk = 0.0
           actual_lateral_jerk = 0.0
-          self.lat_accel_friction_factor = 1.5  # TUNED 1.5 (was 1.0): on-center break-through
+          self.lat_accel_friction_factor = 1.0
         lateral_jerk_setpoint = self.lat_jerk_friction_factor * lookahead_lateral_jerk
         lateral_jerk_measurement = self.lat_jerk_friction_factor * actual_lateral_jerk
 
