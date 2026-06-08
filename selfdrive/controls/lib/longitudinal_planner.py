@@ -64,7 +64,6 @@ class LongitudinalPlanner:
 
     self.a_desired = init_a
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
-    self.v_cruise_coast = init_v  # coast-down smoothing of a lowered set speed
     self.v_model_error = 0.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
@@ -126,16 +125,10 @@ class LongitudinalPlanner:
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
-    # COAST to a lowered set speed (engine-braking feel) instead of braking hard.
-    # Rate-limits only the cruise-target DECREASE. Lead/emergency braking (MPC via
-    # radarState), forceDecel, and turn/speed-limit slowing are applied later and
-    # remain instant. Speed increases are instant too.
-    COAST_SETSPEED_DECEL = 0.5  # m/s^2 (gentle, ~engine-braking)
-    if reset_state or v_cruise > self.v_cruise_coast:
-      self.v_cruise_coast = v_cruise
-    else:
-      self.v_cruise_coast = max(v_cruise, self.v_cruise_coast - COAST_SETSPEED_DECEL * self.dt)
-    v_cruise = self.v_cruise_coast
+    # COAST to a lowered set speed: keep the target at the *new* set speed immediately
+    # (so the car never chases the old, higher speed), and below we clamp the decel
+    # FLOOR to gentle engine-braking for the pure cruise-overspeed case only.
+    driver_set_v = v_cruise  # driver's set speed in m/s, before turn/limit controllers
 
     if self.mpc.mode == 'acc':
       accel_limits = [A_CRUISE_MIN, get_max_accel(v_ego)]
@@ -161,6 +154,24 @@ class LongitudinalPlanner:
     v_cruise = self.cruise_solutions(
       not reset_state and (self.CP.openpilotLongitudinalControl or not self.CP.pcmCruiseSpeed),
       self.v_desired_filter.x, self.a_desired, v_cruise, sm)
+
+    # COAST-DOWN to a lowered set speed via a gentle decel floor (engine-braking feel),
+    # NOT hard braking. Applies ONLY when the binding target is the driver's set speed
+    # and we're overspeed -- so lead cars, curves (vision-turn), speed limits, map-turns
+    # and emergency (forceDecel) all keep FULL braking authority (they lower v_cruise or
+    # set a lead, which disables this clamp). The later min(.., a_desired+0.05) clip stays
+    # after this so an in-progress harder decel (e.g. exiting a curve) won't init the MPC
+    # out of bounds.
+    COAST_DECEL_FLOOR = -0.45  # m/s^2  (~engine-braking; raise magnitude for firmer coast)
+    lead_one = sm['radarState'].leadOne
+    coast_setspeed = (self.mpc.mode == 'acc'
+                      and not force_slow_decel
+                      and v_cruise > 0.1
+                      and self.v_desired_filter.x > v_cruise + 0.1
+                      and v_cruise >= driver_set_v - 0.1
+                      and not (lead_one.status and lead_one.dRel < 100.0))
+    if coast_setspeed:
+      accel_limits_turns[0] = max(accel_limits_turns[0], COAST_DECEL_FLOOR)
 
     # clip limits, cannot init MPC outside of bounds
     accel_limits_turns[0] = min(accel_limits_turns[0], self.a_desired + 0.05)
